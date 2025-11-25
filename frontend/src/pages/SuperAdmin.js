@@ -25,10 +25,23 @@ export default function SuperAdmin() {
       navigate('/dashboard');
       return;
     }
-    fetchAdminStats();
-    fetchAllUsers();
-    fetchAllDomains();
+    loadAllData();
   }, []);
+
+  const loadAllData = async () => {
+    setLoading(true);
+    try {
+      await Promise.all([
+        fetchAdminStats(),
+        fetchAllUsers(),
+        fetchAllDomains()
+      ]);
+    } catch (error) {
+      console.error('Error loading admin data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const fetchAdminStats = async () => {
     try {
@@ -38,8 +51,7 @@ export default function SuperAdmin() {
       setStats(response.data);
     } catch (error) {
       toast.error('Failed to fetch stats');
-    } finally {
-      setLoading(false);
+      throw error;
     }
   };
 
@@ -51,6 +63,7 @@ export default function SuperAdmin() {
       setUsers(response.data);
     } catch (error) {
       toast.error('Failed to fetch users');
+      throw error;
     }
   };
 
@@ -62,6 +75,7 @@ export default function SuperAdmin() {
       setDomains(response.data);
     } catch (error) {
       toast.error('Failed to fetch domains');
+      throw error;
     }
   };
 
