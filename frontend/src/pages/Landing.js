@@ -1,6 +1,60 @@
 import { useNavigate } from 'react-router-dom';
-import { Shield, Eye, Bell, Map, Download, Key, Users } from 'lucide-react';
+import { Shield, Eye, Bell, Map, Download, Key, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useState, useEffect } from 'react';
+import axios from 'axios';
+import BlogCard from '../components/BlogCard';
+
+function BlogSection() {
+  const [blogs, setBlogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
+
+  const API_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+
+  useEffect(() => {
+    fetchRecentBlogs();
+  }, []);
+
+  const fetchRecentBlogs = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/api/blogs/recent`);
+      setBlogs(response.data);
+    } catch (error) {
+      console.error('Error fetching blogs:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading || blogs.length === 0) return null;
+
+  return (
+    <div className="max-w-7xl mx-auto px-8 py-20">
+      <div className="flex justify-between items-center mb-12">
+        <h2
+          className="text-4xl font-bold"
+          style={{ fontFamily: 'Space Grotesk' }}
+        >
+          Latest from Our Blog
+        </h2>
+        <Button
+          variant="outline"
+          onClick={() => navigate('/blogs')}
+          className="border-indigo-500 text-indigo-400 hover:bg-indigo-500/10 flex items-center gap-2"
+        >
+          View All Blogs
+          <ArrowRight className="w-4 h-4" />
+        </Button>
+      </div>
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+        {blogs.map((blog) => (
+          <BlogCard key={blog.id} blog={blog} />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function Landing() {
   const navigate = useNavigate();
@@ -48,7 +102,7 @@ export default function Landing() {
         <nav className="relative z-10 flex items-center justify-between px-8 py-6 max-w-7xl mx-auto">
           <div className="flex items-center space-x-3">
             <Shield className="w-8 h-8 text-indigo-400" />
-            <span className="text-2xl font-bold" style={{ fontFamily: 'Space Grotesk' }}>AIBot Detect</span>
+            <span className="text-2xl font-bold" style={{ fontFamily: 'Space Grotesk' }}>AI Tracker</span>
           </div>
           <div className="flex items-center space-x-4">
             <Button
@@ -162,6 +216,9 @@ export default function Landing() {
         </div>
       </div>
 
+      {/* Blog Section */}
+      <BlogSection />
+
       {/* CTA Section */}
       <div className="max-w-7xl mx-auto px-8 py-20">
         <div className="glass-effect p-16 text-center">
@@ -188,7 +245,7 @@ export default function Landing() {
       {/* Footer */}
       <footer className="border-t border-white/10 py-8">
         <div className="max-w-7xl mx-auto px-8 text-center text-gray-500">
-          <p>&copy; 2025 AIBot Detect. All rights reserved.</p>
+          <p>&copy; 2025 AI Tracker. All rights reserved.</p>
         </div>
       </footer>
     </div>

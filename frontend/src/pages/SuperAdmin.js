@@ -108,13 +108,23 @@ export default function SuperAdmin() {
       
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
-          <div className="flex items-center space-x-3 mb-2">
-            <Shield className="w-8 h-8 text-red-400" />
-            <h1 className="text-3xl font-bold" style={{ fontFamily: 'Space Grotesk' }} data-testid="super-admin-title">
-              Super Admin Panel
-            </h1>
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center space-x-3 mb-2">
+                <Shield className="w-8 h-8 text-red-400" />
+                <h1 className="text-3xl font-bold" style={{ fontFamily: 'Space Grotesk' }} data-testid="super-admin-title">
+                  Super Admin Panel
+                </h1>
+              </div>
+              <p className="text-gray-400">Monitor all users and system activity</p>
+            </div>
+            <Button
+              onClick={() => navigate('/admin/blogs')}
+              className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700"
+            >
+              Manage Blogs
+            </Button>
           </div>
-          <p className="text-gray-400">Monitor all users and system activity</p>
         </div>
 
         {/* Global Stats */}

@@ -15,6 +15,8 @@ from passlib.context import CryptContext
 import secrets
 import requests
 from collections import Counter
+import re
+from html.parser import HTMLParser
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -31,8 +33,17 @@ JWT_SECRET = os.environ.get('JWT_SECRET', secrets.token_urlsafe(32))
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION = 24 * 7  # 7 days
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    yield
+    # Shutdown
+    client.close()
+
 # Create the main app without a prefix
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -87,6 +98,87 @@ class UserResponse(BaseModel):
     id: str
     email: str
     is_super_admin: bool
+    created_at: datetime
+
+class Blog(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    title: str
+    slug: str
+    content: str  # Rich HTML content
+    excerpt: str
+    featured_image: Optional[str] = None
+    author_id: str
+    author_name: str
+    status: str = "draft"  # draft or published
+    seo_title: Optional[str] = None
+    seo_description: Optional[str] = None
+    seo_keywords: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+    view_count: int = 0
+    reading_time: int = 0  # in minutes
+    published_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class BlogCreate(BaseModel):
+    title: str
+    slug: Optional[str] = None
+    content: str
+    excerpt: str
+    featured_image: Optional[str] = None
+    status: str = "draft"
+    seo_title: Optional[str] = None
+    seo_description: Optional[str] = None
+    seo_keywords: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+    published_at: Optional[datetime] = None
+
+class BlogUpdate(BaseModel):
+    title: Optional[str] = None
+    slug: Optional[str] = None
+    content: Optional[str] = None
+    excerpt: Optional[str] = None
+    featured_image: Optional[str] = None
+    status: Optional[str] = None
+    seo_title: Optional[str] = None
+    seo_description: Optional[str] = None
+    seo_keywords: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
+    published_at: Optional[datetime] = None
+
+class BlogResponse(BaseModel):
+    id: str
+    title: str
+    slug: str
+    content: str
+    excerpt: str
+    featured_image: Optional[str]
+    author_id: str
+    author_name: str
+    status: str
+    seo_title: Optional[str]
+    seo_description: Optional[str]
+    seo_keywords: List[str]
+    tags: List[str]
+    view_count: int
+    reading_time: int
+    published_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+
+class BlogListResponse(BaseModel):
+    id: str
+    title: str
+    slug: str
+    excerpt: str
+    featured_image: Optional[str]
+    author_name: str
+    status: str
+    tags: List[str]
+    view_count: int
+    reading_time: int
+    published_at: Optional[datetime]
     created_at: datetime
 
 class Domain(BaseModel):
@@ -235,6 +327,46 @@ async def get_super_admin(user: dict = Depends(get_current_user)) -> dict:
     if not user.get("is_super_admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin access required")
     return user
+
+# Blog Helper Functions
+class HTMLStripper(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.text = []
+    
+    def handle_data(self, data):
+        self.text.append(data)
+    
+    def get_text(self):
+        return ''.join(self.text)
+
+def strip_html(html: str) -> str:
+    """Remove HTML tags from string"""
+    stripper = HTMLStripper()
+    stripper.feed(html)
+    return stripper.get_text()
+
+def generate_slug(title: str) -> str:
+    """Generate URL-friendly slug from title"""
+    slug = title.lower()
+    slug = re.sub(r'[^a-z0-9\s-]', '', slug)
+    slug = re.sub(r'[\s]+', '-', slug)
+    slug = slug.strip('-')
+    return slug
+
+def calculate_reading_time(content: str) -> int:
+    """Calculate reading time in minutes (avg 200 words/min)"""
+    text = strip_html(content)
+    word_count = len(text.split())
+    reading_time = max(1, round(word_count / 200))
+    return reading_time
+
+def extract_excerpt(content: str, length: int = 160) -> str:
+    """Extract excerpt from content"""
+    text = strip_html(content)
+    if len(text) <= length:
+        return text
+    return text[:length].rsplit(' ', 1)[0] + '...'
 
 def detect_bot(user_agent: str, ip_address: str) -> tuple:
     """Detect if request is from AI bot and calculate confidence score"""
@@ -689,6 +821,210 @@ async def get_user_activity(user_id: str, admin: dict = Depends(get_super_admin)
         "api_keys": api_keys
     }
 
+# Blog Routes - Super Admin Only
+@api_router.post("/admin/blogs", response_model=BlogResponse)
+async def create_blog(blog_data: BlogCreate, admin: dict = Depends(get_super_admin)):
+    # Generate slug if not provided
+    slug = blog_data.slug or generate_slug(blog_data.title)
+    
+    # Check if slug already exists
+    existing = await db.blogs.find_one({"slug": slug})
+    if existing:
+        # Add random suffix to make it unique
+        slug = f"{slug}-{secrets.token_urlsafe(4)}"
+    
+    # Calculate reading time
+    reading_time = calculate_reading_time(blog_data.content)
+    
+    # Create blog
+    blog = Blog(
+        title=blog_data.title,
+        slug=slug,
+        content=blog_data.content,
+        excerpt=blog_data.excerpt,
+        featured_image=blog_data.featured_image,
+        author_id=admin['id'],
+        author_name=admin['email'].split('@')[0],
+        status=blog_data.status,
+        seo_title=blog_data.seo_title or blog_data.title,
+        seo_description=blog_data.seo_description or blog_data.excerpt,
+        seo_keywords=blog_data.seo_keywords,
+        tags=blog_data.tags,
+        reading_time=reading_time,
+        published_at=blog_data.published_at if blog_data.status == "published" else None
+    )
+    
+    doc = blog.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    doc['updated_at'] = doc['updated_at'].isoformat()
+    if doc.get('published_at'):
+        doc['published_at'] = doc['published_at'].isoformat()
+    
+    await db.blogs.insert_one(doc)
+    
+    return BlogResponse(**blog.model_dump())
+
+@api_router.put("/admin/blogs/{blog_id}", response_model=BlogResponse)
+async def update_blog(blog_id: str, blog_data: BlogUpdate, admin: dict = Depends(get_super_admin)):
+    # Get existing blog
+    existing = await db.blogs.find_one({"id": blog_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Blog not found")
+    
+    # Prepare update data
+    update_data = {k: v for k, v in blog_data.model_dump().items() if v is not None}
+    
+    # Update slug if title changed
+    if 'title' in update_data and 'slug' not in update_data:
+        update_data['slug'] = generate_slug(update_data['title'])
+    
+    # Check slug uniqueness if slug is being updated
+    if 'slug' in update_data and update_data['slug'] != existing['slug']:
+        slug_exists = await db.blogs.find_one({"slug": update_data['slug'], "id": {"$ne": blog_id}})
+        if slug_exists:
+            update_data['slug'] = f"{update_data['slug']}-{secrets.token_urlsafe(4)}"
+    
+    # Recalculate reading time if content changed
+    if 'content' in update_data:
+        update_data['reading_time'] = calculate_reading_time(update_data['content'])
+    
+    # Update published_at if status changed to published
+    if 'status' in update_data and update_data['status'] == 'published' and not existing.get('published_at'):
+        update_data['published_at'] = datetime.now(timezone.utc).isoformat()
+    
+    update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+    
+    await db.blogs.update_one({"id": blog_id}, {"$set": update_data})
+    
+    # Get updated blog
+    updated_blog = await db.blogs.find_one({"id": blog_id}, {"_id": 0})
+    
+    # Convert datetime strings back to datetime objects
+    for field in ['created_at', 'updated_at', 'published_at']:
+        if updated_blog.get(field) and isinstance(updated_blog[field], str):
+            updated_blog[field] = datetime.fromisoformat(updated_blog[field])
+    
+    return BlogResponse(**updated_blog)
+
+@api_router.delete("/admin/blogs/{blog_id}")
+async def delete_blog(blog_id: str, admin: dict = Depends(get_super_admin)):
+    result = await db.blogs.delete_one({"id": blog_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Blog not found")
+    return {"success": True}
+
+@api_router.get("/admin/blogs", response_model=List[BlogListResponse])
+async def get_all_blogs_admin(
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    admin: dict = Depends(get_super_admin)
+):
+    query = {}
+    if status:
+        query["status"] = status
+    if search:
+        query["$or"] = [
+            {"title": {"$regex": search, "$options": "i"}},
+            {"excerpt": {"$regex": search, "$options": "i"}}
+        ]
+    
+    blogs = await db.blogs.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    
+    for blog in blogs:
+        for field in ['created_at', 'updated_at', 'published_at']:
+            if blog.get(field) and isinstance(blog[field], str):
+                blog[field] = datetime.fromisoformat(blog[field])
+    
+    return [BlogListResponse(**blog) for blog in blogs]
+
+@api_router.get("/admin/blogs/{blog_id}", response_model=BlogResponse)
+async def get_blog_by_id_admin(blog_id: str, admin: dict = Depends(get_super_admin)):
+    blog = await db.blogs.find_one({"id": blog_id}, {"_id": 0})
+    if not blog:
+        raise HTTPException(status_code=404, detail="Blog not found")
+    
+    for field in ['created_at', 'updated_at', 'published_at']:
+        if blog.get(field) and isinstance(blog[field], str):
+            blog[field] = datetime.fromisoformat(blog[field])
+    
+    return BlogResponse(**blog)
+
+# Blog Routes - Public
+@api_router.get("/blogs", response_model=List[BlogListResponse])
+async def get_published_blogs(
+    page: int = 1,
+    limit: int = 10,
+    tag: Optional[str] = None,
+    search: Optional[str] = None
+):
+    query = {"status": "published"}
+    
+    if tag:
+        query["tags"] = tag
+    
+    if search:
+        query["$or"] = [
+            {"title": {"$regex": search, "$options": "i"}},
+            {"excerpt": {"$regex": search, "$options": "i"}},
+            {"content": {"$regex": search, "$options": "i"}}
+        ]
+    
+    skip = (page - 1) * limit
+    
+    blogs = await db.blogs.find(query, {"_id": 0}).sort("published_at", -1).skip(skip).limit(limit).to_list(limit)
+    
+    for blog in blogs:
+        for field in ['created_at', 'updated_at', 'published_at']:
+            if blog.get(field) and isinstance(blog[field], str):
+                blog[field] = datetime.fromisoformat(blog[field])
+    
+    return [BlogListResponse(**blog) for blog in blogs]
+
+@api_router.get("/blogs/recent", response_model=List[BlogListResponse])
+async def get_recent_blogs():
+    blogs = await db.blogs.find(
+        {"status": "published"}, 
+        {"_id": 0}
+    ).sort("published_at", -1).limit(3).to_list(3)
+    
+    for blog in blogs:
+        for field in ['created_at', 'updated_at', 'published_at']:
+            if blog.get(field) and isinstance(blog[field], str):
+                blog[field] = datetime.fromisoformat(blog[field])
+    
+    return [BlogListResponse(**blog) for blog in blogs]
+
+@api_router.get("/blogs/{slug}", response_model=BlogResponse)
+async def get_blog_by_slug(slug: str):
+    blog = await db.blogs.find_one({"slug": slug, "status": "published"}, {"_id": 0})
+    if not blog:
+        raise HTTPException(status_code=404, detail="Blog not found")
+    
+    # Increment view count
+    await db.blogs.update_one({"slug": slug}, {"$inc": {"view_count": 1}})
+    blog['view_count'] += 1
+    
+    for field in ['created_at', 'updated_at', 'published_at']:
+        if blog.get(field) and isinstance(blog[field], str):
+            blog[field] = datetime.fromisoformat(blog[field])
+    
+    return BlogResponse(**blog)
+
+@api_router.get("/blogs/tags/all")
+async def get_all_tags():
+    # Get all published blogs
+    blogs = await db.blogs.find({"status": "published"}, {"_id": 0, "tags": 1}).to_list(10000)
+    
+    # Count tags
+    tag_counter = Counter()
+    for blog in blogs:
+        for tag in blog.get('tags', []):
+            tag_counter[tag] += 1
+    
+    # Return sorted by count
+    tags = [{"name": tag, "count": count} for tag, count in tag_counter.most_common()]
+    return tags
+
 # Include the router in the main app
 app.include_router(api_router)
 
@@ -707,6 +1043,4 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+

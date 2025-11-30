@@ -1,7 +1,7 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getUser, removeAuthToken, removeUser } from '@/App';
 import { Button } from '@/components/ui/button';
-import { Shield, LayoutDashboard, Globe, Activity, Key, Bell, UserCog, LogOut } from 'lucide-react';
+import { Shield, LayoutDashboard, Globe, Activity, Key, Bell, UserCog, LogOut, FileText } from 'lucide-react';
 
 export default function Navigation() {
   const navigate = useNavigate();
@@ -24,6 +24,7 @@ export default function Navigation() {
 
   if (user?.is_super_admin) {
     navItems.push({ path: '/admin', icon: <UserCog className="w-5 h-5" />, label: 'Super Admin' });
+    navItems.push({ path: '/admin/blogs', icon: <FileText className="w-5 h-5" />, label: 'Blogs' });
   }
 
   return (
@@ -33,7 +34,7 @@ export default function Navigation() {
           <div className="flex items-center space-x-8">
             <div className="flex items-center space-x-2 cursor-pointer" onClick={() => navigate('/dashboard')}>
               <Shield className="w-6 h-6 text-indigo-400" />
-              <span className="text-xl font-bold" style={{ fontFamily: 'Space Grotesk' }}>AIBot Detect</span>
+              <span className="text-xl font-bold" style={{ fontFamily: 'Space Grotesk' }}>AI Tracker</span>
             </div>
 
             <nav className="hidden md:flex items-center space-x-1">

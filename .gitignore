@@ -1,80 +1,56 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# IDE and editors
-.idea/
-.vscode/
-
 # Dependencies
 node_modules/
-/node_modules
-/.pnp
-.pnp.js
-.yarn/install-state.gz
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+backend/venv/
+backend/__pycache__/
 
-# Testing
-/coverage
+# Build files
+frontend/build/
 
-# Next.js
-/.next/
-/out/
-next-env.d.ts
-*.tsbuildinfo
+# Environment files - DO NOT COMMIT
+.env
+backend/.env
+frontend/.env
 
-# Production builds
-/build
-dist/
-dist
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
 
-# Environment files (comprehensive coverage)
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
 
-*token.json*
-*credentials.json*
-
-# Logs and debug files
+# Logs
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
-dump.rdb
 
-# System files
-.DS_Store
-*.pem
-
-# Python
+# Test files
+test_reports/
+*.pyc
 __pycache__/
-*pyc*
-venv/
-.venv/
 
-# Development tools
-chainlit.md
-.chainlit
-.ipynb_checkpoints/
-.ac
+# Database
+*.db
+*.sqlite
+*.sqlite3
 
-# Deployment
-.vercel
-
-# Data and databases
-agenthub/agents/youtube/db
-
-# Archive files and large assets
-**/*.zip
-**/*.tar.gz
-**/*.tar
-**/*.tgz
-*.pack
-*.deb
-*.dylib
-
-# Build caches
+# Temporary files
+*.tmp
+*.temp
 .cache/
 
-# Mobile development
-android-sdk/ 
+# Package files
+*.zip
+*.tar.gz
+*.rar
+
+# MongoDB exports (optional - remove if you want to commit these)
+mongodb_*.json
+
+*.md
+./emergent

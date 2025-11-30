@@ -49,7 +49,7 @@ export default function Register() {
         <div className="text-center mb-8">
           <div className="flex items-center justify-center space-x-3 mb-4">
             <Shield className="w-10 h-10 text-indigo-400" />
-            <span className="text-3xl font-bold" style={{ fontFamily: 'Space Grotesk' }}>AIBot Detect</span>
+            <span className="text-3xl font-bold" style={{ fontFamily: 'Space Grotesk' }}>AI Tracker</span>
           </div>
           <h1 className="text-2xl font-semibold mb-2">Create Account</h1>
           <p className="text-gray-400">Start monitoring AI bot traffic</p>
