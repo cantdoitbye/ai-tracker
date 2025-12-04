@@ -17,6 +17,8 @@ import requests
 from collections import Counter
 import re
 from html.parser import HTMLParser
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -32,6 +34,11 @@ security = HTTPBearer()
 JWT_SECRET = os.environ.get('JWT_SECRET', secrets.token_urlsafe(32))
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION = 24 * 7  # 7 days
+
+# Google OAuth
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
+GOOGLE_REDIRECT_URI = os.environ.get('GOOGLE_REDIRECT_URI', 'http://localhost:3000')
 
 from contextlib import asynccontextmanager
 
@@ -82,7 +89,9 @@ class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     email: EmailStr
-    password_hash: str
+    password_hash: Optional[str] = None  # Optional for OAuth users
+    oauth_provider: Optional[str] = None  # 'google', 'email', etc.
+    google_id: Optional[str] = None  # Google user ID
     is_super_admin: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -93,6 +102,11 @@ class UserCreate(BaseModel):
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
+
+class GoogleAuthRequest(BaseModel):
+    token: str
+    email: str
+    google_id: str
 
 class UserResponse(BaseModel):
     id: str
@@ -434,7 +448,8 @@ async def register(user_data: UserCreate):
     
     user = User(
         email=user_data.email,
-        password_hash=hash_password(user_data.password)
+        password_hash=hash_password(user_data.password),
+        oauth_provider="email"
     )
     
     doc = user.model_dump()
@@ -446,11 +461,63 @@ async def register(user_data: UserCreate):
 @api_router.post("/auth/login")
 async def login(credentials: UserLogin):
     user = await db.users.find_one({"email": credentials.email}, {"_id": 0})
-    if not user or not verify_password(credentials.password, user['password_hash']):
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Check if user registered with OAuth
+    if user.get('oauth_provider') == 'google' and not user.get('password_hash'):
+        raise HTTPException(status_code=401, detail="Please sign in with Google")
+    
+    if not verify_password(credentials.password, user.get('password_hash', '')):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
     token = create_access_token({"sub": user['id'], "email": user['email']})
     return {"access_token": token, "token_type": "bearer", "user": UserResponse(**user).model_dump()}
+
+@api_router.post("/auth/google")
+async def google_auth(auth_data: GoogleAuthRequest):
+    """Authenticate user with Google OAuth token"""
+    try:
+        email = auth_data.email
+        google_user_id = auth_data.google_id
+        
+        # Check if user exists
+        user = await db.users.find_one({"email": email}, {"_id": 0})
+        
+        if user:
+            # User exists - update google_id if not set
+            if not user.get('google_id'):
+                await db.users.update_one(
+                    {"email": email},
+                    {"$set": {"google_id": google_user_id, "oauth_provider": "google"}}
+                )
+                user['google_id'] = google_user_id
+                user['oauth_provider'] = "google"
+        else:
+            # Create new user
+            user = User(
+                email=email,
+                oauth_provider="google",
+                google_id=google_user_id
+            )
+            
+            doc = user.model_dump()
+            doc['created_at'] = doc['created_at'].isoformat()
+            await db.users.insert_one(doc)
+            user = doc
+        
+        # Generate JWT token
+        token = create_access_token({"sub": user['id'], "email": user['email']})
+        
+        return {
+            "access_token": token, 
+            "token_type": "bearer", 
+            "user": UserResponse(**user).model_dump()
+        }
+        
+    except Exception as e:
+        logging.error(f"Google auth error: {e}")
+        raise HTTPException(status_code=500, detail="Authentication failed")
 
 @api_router.get("/auth/me", response_model=UserResponse)
 async def get_me(user: dict = Depends(get_current_user)):
@@ -494,44 +561,142 @@ async def verify_domain(domain_id: str, user: dict = Depends(get_current_user)):
     if domain['is_verified']:
         return {"verified": True, "message": "Domain already verified"}
     
+    verification_errors = []
+    
     # Try DNS TXT verification
     try:
         import dns.resolver
-        answers = dns.resolver.resolve(domain['domain'], 'TXT')
+        
+        # Create resolver with custom settings to avoid caching issues
+        resolver = dns.resolver.Resolver()
+        resolver.cache = dns.resolver.Cache()  # Fresh cache
+        resolver.lifetime = 10  # 10 second timeout
+        
         verification_string = f"aibot-detect={domain['verification_token']}"
         
-        for rdata in answers:
-            for txt_string in rdata.strings:
-                if verification_string.encode() in txt_string:
-                    # Verified!
-                    await db.domains.update_one(
-                        {"id": domain_id},
-                        {"$set": {
-                            "is_verified": True,
-                            "verified_at": datetime.now(timezone.utc).isoformat()
-                        }}
-                    )
-                    return {"verified": True, "method": "DNS"}
+        try:
+            answers = resolver.resolve(domain['domain'], 'TXT')
+            found_records = []
+            
+            for rdata in answers:
+                for txt_string in rdata.strings:
+                    txt_decoded = txt_string.decode('utf-8') if isinstance(txt_string, bytes) else txt_string
+                    found_records.append(txt_decoded)
+                    
+                    if verification_string in txt_decoded:
+                        # Verified!
+                        await db.domains.update_one(
+                            {"id": domain_id},
+                            {"$set": {
+                                "is_verified": True,
+                                "verified_at": datetime.now(timezone.utc).isoformat()
+                            }}
+                        )
+                        return {"verified": True, "method": "DNS", "message": "Domain verified via DNS TXT record"}
+            
+            # Record found but doesn't match
+            if found_records:
+                verification_errors.append(f"DNS TXT records found but don't match. Found: {', '.join(found_records[:3])}")
+            else:
+                verification_errors.append("No TXT records found for domain")
+                
+        except dns.resolver.NXDOMAIN:
+            verification_errors.append(f"Domain {domain['domain']} does not exist")
+        except dns.resolver.NoAnswer:
+            verification_errors.append("No TXT records found for domain")
+        except dns.resolver.Timeout:
+            verification_errors.append("DNS query timed out. Please try again.")
+        except Exception as dns_err:
+            verification_errors.append(f"DNS lookup error: {str(dns_err)}")
+            
+    except ImportError:
+        verification_errors.append("DNS verification not available (dnspython not installed)")
     except Exception as e:
-        logging.info(f"DNS verification failed: {e}")
+        logging.error(f"DNS verification error: {e}")
+        verification_errors.append(f"DNS verification failed: {str(e)}")
     
     # Try file verification
     try:
         file_url = f"https://{domain['domain']}/.well-known/aibot-detect.txt"
-        response = requests.get(file_url, timeout=5)
-        if response.status_code == 200 and domain['verification_token'] in response.text:
-            await db.domains.update_one(
-                {"id": domain_id},
-                {"$set": {
-                    "is_verified": True,
-                    "verified_at": datetime.now(timezone.utc).isoformat()
-                }}
-            )
-            return {"verified": True, "method": "FILE"}
+        response = requests.get(file_url, timeout=5, verify=True)
+        
+        if response.status_code == 200:
+            if domain['verification_token'] in response.text:
+                await db.domains.update_one(
+                    {"id": domain_id},
+                    {"$set": {
+                        "is_verified": True,
+                        "verified_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+                return {"verified": True, "method": "FILE", "message": "Domain verified via file"}
+            else:
+                verification_errors.append(f"File found but token doesn't match. Expected: {domain['verification_token']}")
+        else:
+            verification_errors.append(f"File not found (HTTP {response.status_code})")
+    except requests.exceptions.SSLError:
+        verification_errors.append("SSL certificate error. Ensure your domain has a valid SSL certificate.")
+    except requests.exceptions.ConnectionError:
+        verification_errors.append(f"Cannot connect to {domain['domain']}. Ensure the domain is accessible.")
+    except requests.exceptions.Timeout:
+        verification_errors.append("File verification timed out")
     except Exception as e:
-        logging.info(f"File verification failed: {e}")
+        logging.error(f"File verification error: {e}")
+        verification_errors.append(f"File verification failed: {str(e)}")
     
-    return {"verified": False, "message": "Verification failed. Please check DNS TXT record or file."}
+    # Return detailed error message
+    error_message = " | ".join(verification_errors) if verification_errors else "Verification failed"
+    return {
+        "verified": False, 
+        "message": error_message,
+        "expected_txt_record": f"aibot-detect={domain['verification_token']}",
+        "expected_file_url": f"https://{domain['domain']}/.well-known/aibot-detect.txt",
+        "expected_file_content": domain['verification_token']
+    }
+
+@api_router.get("/domains/{domain_id}/check-dns")
+async def check_domain_dns(domain_id: str, user: dict = Depends(get_current_user)):
+    """Check current DNS TXT records for debugging"""
+    domain = await db.domains.find_one({"id": domain_id, "user_id": user['id']}, {"_id": 0})
+    if not domain:
+        raise HTTPException(status_code=404, detail="Domain not found")
+    
+    result = {
+        "domain": domain['domain'],
+        "expected_record": f"aibot-detect={domain['verification_token']}",
+        "found_records": [],
+        "status": "unknown"
+    }
+    
+    try:
+        import dns.resolver
+        resolver = dns.resolver.Resolver()
+        resolver.cache = dns.resolver.Cache()
+        
+        answers = resolver.resolve(domain['domain'], 'TXT')
+        for rdata in answers:
+            for txt_string in rdata.strings:
+                txt_decoded = txt_string.decode('utf-8') if isinstance(txt_string, bytes) else txt_string
+                result["found_records"].append(txt_decoded)
+        
+        if result["found_records"]:
+            result["status"] = "records_found"
+            if result["expected_record"] in result["found_records"]:
+                result["status"] = "match_found"
+        else:
+            result["status"] = "no_records"
+            
+    except dns.resolver.NXDOMAIN:
+        result["status"] = "domain_not_found"
+        result["error"] = "Domain does not exist"
+    except dns.resolver.NoAnswer:
+        result["status"] = "no_txt_records"
+        result["error"] = "No TXT records found"
+    except Exception as e:
+        result["status"] = "error"
+        result["error"] = str(e)
+    
+    return result
 
 @api_router.delete("/domains/{domain_id}")
 async def delete_domain(domain_id: str, user: dict = Depends(get_current_user)):

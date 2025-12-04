@@ -74,13 +74,18 @@ export default function ApiKeys() {
     toast.success('Copied to clipboard');
   };
 
-  const integrationCode = (apiKey, domain) => `
+  const integrationCode = (apiKey, domain) => {
+    // Get the backend URL from environment variable
+    const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+    const apiUrl = `${backendUrl}/api`;
+    
+    return `
 <!-- Add this script to your website -->
 <script>
 (function() {
   const API_KEY = '${apiKey}';
   const DOMAIN = '${domain}';
-  const API_URL = 'https://aibot-detect.preview.emergentagent.com/api';
+  const API_URL = '${apiUrl}';
 
   // Log page view
   fetch(API_URL + '/traffic/log', {
@@ -97,6 +102,7 @@ export default function ApiKeys() {
   });
 })();
 </script>`;
+  };
 
   return (
     <div className="min-h-screen">

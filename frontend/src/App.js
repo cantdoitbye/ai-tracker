@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import '@/App.css';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { HelmetProvider } from 'react-helmet-async';
+import { GoogleOAuthProvider } from '@react-oauth/google';
 import Landing from '@/pages/Landing';
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
@@ -36,10 +37,13 @@ function PrivateRoute({ children }) {
 }
 
 function App() {
+  const googleClientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
+
   return (
-    <HelmetProvider>
-      <div className="App">
-        <BrowserRouter>
+    <GoogleOAuthProvider clientId={googleClientId}>
+      <HelmetProvider>
+        <div className="App">
+          <BrowserRouter>
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
@@ -129,6 +133,7 @@ function App() {
         <Toaster position="top-right" />
       </div>
     </HelmetProvider>
+    </GoogleOAuthProvider>
   );
 }
 
