@@ -144,97 +144,107 @@ const BlogDetail = () => {
           </div>
         </div>
 
-        <article className="max-w-4xl mx-auto px-4 py-12">
-          {/* Header */}
-          <header className="mb-8">
-            <div className="flex flex-wrap gap-2 mb-4">
-              {blog.tags.map((tag, index) => (
-                <Link
-                  key={index}
-                  to={`/blogs?tag=${tag}`}
-                  className="px-3 py-1 bg-indigo-500/20 text-indigo-400 text-sm rounded-full hover:bg-indigo-500/30"
-                >
-                  {tag}
-                </Link>
-              ))}
-            </div>
 
-            <h1 className="text-4xl md:text-5xl font-bold text-white mb-4" style={{ fontFamily: 'Space Grotesk' }}>
-              {blog.title}
-            </h1>
+// {blog}
 
-            <div className="flex flex-wrap items-center gap-4 text-gray-400 mb-6">
-              <div className="flex items-center gap-2">
-                <div className="w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center text-white font-semibold">
-                  {blog.author_name[0].toUpperCase()}
-                </div>
-                <span className="font-medium">{blog.author_name}</span>
+   <div className="min-h-screen bg-blog-dark w-full text-blog-text relative">
+      {/* Gradient Background */}
+      <div className="absolute inset-0 bg-gradient-to-br from-blog-coral/20 via-blog-purple/20 to-blog-dark" />
+      <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-gradient-to-bl from-blog-coral/30 via-blog-purple/20 to-transparent rounded-full blur-3xl" />
+      <div className="absolute bottom-0 left-0 w-[300px] h-[300px] bg-gradient-to-tr from-blog-purple/30 to-transparent rounded-full blur-3xl" />
+        
+      {/* Hero Section */}
+      <section className="relative overflow-hidden">
+        <div className="relative max-w-7xl mx-auto px-6 py-16 lg:py-24 w-full">
+          <div className="grid lg:grid-cols-1 gap-12 items-center max-w-4xl mx-auto">
+            <div className="space-y-6">
+ 
+              {/* Title */}
+              <h1 className="text-2xl lg:text-4xl xl:text-5xl font-bold text-white leading-tight">
+                {blog.title}
+              </h1>
+
+              {/* tags */}
+              <div className="flex flex-wrap gap-3">
+                {blog.tags.map((tag, index) => (
+                  <span key={index} className="px-3 py-1.5 bg-blog-coral/10 text-blog-coral text-sm font-medium rounded-full border border-blog-coral/30">
+                    {tag}
+                  </span>
+                ))}
               </div>
-              <span className="flex items-center gap-1">
-                <Calendar className="w-4 h-4" />
-                {formatDate(blog.published_at || blog.created_at)}
-              </span>
-              <span className="flex items-center gap-1">
-                <Clock className="w-4 h-4" />
-                {blog.reading_time} min read
-              </span>
-              <span className="flex items-center gap-1">
-                <Eye className="w-4 h-4" />
-                {blog.view_count} views
-              </span>
+
+              {/* Author Info */}
+              <div className="flex flex-wrap items-center gap-6 pt-4 overflow-x-auto">
+                <div className="flex items-center gap-3">
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blog-coral to-blog-purple flex items-center justify-center">
+                    <User className="w-3 h-3 text-white" />
+                  </div>
+                  <div>
+                    <p className="text-white font-medium">{blog.author_name}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap  items-center gap-4 text-blog-muted text-sm whitespace-nowrap">
+                  <span className="flex items-center gap-1.5">
+                    <Calendar className="w-4 h-4" />
+                    {formatDate(blog.published_at || blog.created_at)}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <Clock className="w-4 h-4" />
+                    {blog.reading_time} min read
+                  </span>
+
+                  <span className="flex items-center gap-1.5">
+                    <Eye className="w-4 h-4" />
+                    {blog.view_count} views
+                  </span>
+                </div>
+              </div>
             </div>
 
-            <button
-              onClick={handleShare}
-              className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-colors text-white"
-            >
-              <Share2 className="w-4 h-4" />
-              Share
-            </button>
-          </header>
+            {/* Hero Image/Graphic */}
+            {blog.featured_image && (
+              <div className="relative">
+                <img
+                  src={blog.featured_image}
+                  alt={blog.title}
+                  className="w-full h-auto rounded-2xl shadow-lg"
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
 
-          {/* Featured Image */}
-          {blog.featured_image && (
-            <div className="mb-8 rounded-lg overflow-hidden">
-              <img
-                src={blog.featured_image}
-                alt={blog.title}
-                className="w-full h-auto"
-              />
-            </div>
-          )}
-
-          {/* Content */}
-          <div 
-            className="prose prose-lg prose-invert max-w-none mb-12 glass-effect p-8 rounded-lg"
+      {/* Article Content */}
+      <article className="w-full max-w-4xl mx-auto px-6 pb-16 relative">
+        <div 
+            className="prose-blog space-y-6"
             dangerouslySetInnerHTML={{ __html: blog.content }}
           />
 
-          {/* Author Bio */}
-          <div className="glass-effect p-6 mb-12 rounded-lg">
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 bg-indigo-600 rounded-full flex items-center justify-center text-white text-2xl font-semibold">
-                {blog.author_name[0].toUpperCase()}
-              </div>
-              <div>
-                <h3 className="font-semibold text-lg text-white">Written by {blog.author_name}</h3>
-                <p className="text-gray-400">Content creator and tech enthusiast</p>
-              </div>
-            </div>
-          </div>
+        <button
+            onClick={handleShare}
+            className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-colors text-white mt-8"
+        >
+            <Share2 className="w-4 h-4" />
+            Share
+        </button>
 
-          {/* Related Blogs */}
-          {relatedBlogs.length > 0 && (
-            <div>
-              <h2 className="text-2xl font-bold mb-6 text-white" style={{ fontFamily: 'Space Grotesk' }}>Related Articles</h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {relatedBlogs.map((relatedBlog) => (
-                  <BlogCard key={relatedBlog.id} blog={relatedBlog} />
-                ))}
-              </div>
+        {/* Related Blogs */}
+        {relatedBlogs.length > 0 && (
+        <section className="mt-16 space-y-6">
+            <h2 className="text-3xl font-bold text-white">Related Articles</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {relatedBlogs.map((relatedBlog) => (
+                <BlogCard key={relatedBlog.id} blog={relatedBlog} />
+            ))}
             </div>
-          )}
-        </article>
+        </section>
+        )}
+      </article>
+    </div>
+
+      
       </div>
     </>
   );
