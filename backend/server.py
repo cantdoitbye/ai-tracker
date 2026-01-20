@@ -19,6 +19,8 @@ import re
 from html.parser import HTMLParser
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
+import hashlib
+import json
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -54,6 +56,13 @@ app = FastAPI(lifespan=lifespan)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
+
+# code update by Subhro adding global memory for BEHAVIORAL (RAG) ANALYSIS
+from collections import defaultdict
+import time
+
+REQUEST_HISTORY = defaultdict(list)
+
 
 # Known AI Bot Signatures
 AI_BOT_SIGNATURES = {
@@ -368,12 +377,38 @@ def generate_slug(title: str) -> str:
     slug = slug.strip('-')
     return slug
 
+# code update by Subhro for bot fingerprint for detecting rotating IP by the identifier created
+
+def generate_fingerprint(user_agent: str, headers: dict, ip: str) -> str:
+    payload = {
+        "ua": user_agent,
+        "accept": headers.get("accept"),
+        "lang": headers.get("accept-language"),
+        "encoding": headers.get("accept-encoding"),
+        "ip_block": ".".join(ip.split(".")[:2])
+    }
+    raw = json.dumps(payload, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
 def calculate_reading_time(content: str) -> int:
     """Calculate reading time in minutes (avg 200 words/min)"""
     text = strip_html(content)
     word_count = len(text.split())
     reading_time = max(1, round(word_count / 200))
     return reading_time
+
+#code updated by subhro (FIX one IP issues BUG)
+
+def get_real_ip(headers: dict, fallback_ip: str) -> str:
+    if "cf-connecting-ip" in headers:
+        return headers["cf-connecting-ip"]
+    if "x-forwarded-for" in headers:
+        return headers["x-forwarded-for"].split(",")[0].strip()
+    if "x-real-ip" in headers:
+        return headers["x-real-ip"]
+    return fallback_ip
+
 
 def extract_excerpt(content: str, length: int = 160) -> str:
     """Extract excerpt from content"""
@@ -741,14 +776,27 @@ async def log_traffic(log_data: TrafficLogCreate):
     api_key_doc = await db.api_keys.find_one({"key": log_data.api_key, "is_active": True}, {"_id": 0})
     if not api_key_doc:
         raise HTTPException(status_code=401, detail="Invalid API key")
+
     
     # Find domain
     domain = await db.domains.find_one({"domain": log_data.domain, "is_verified": True}, {"_id": 0})
     if not domain:
         raise HTTPException(status_code=404, detail="Domain not found or not verified")
+
+    # code update by Subhro adding fingerprint during logging
+    # Find fingerprint
+    fingerprint = generate_fingerprint(log_data.user_agent, headers, real_ip)
+
     
-    # Detect bot
-    detected_bot, bot_provider, confidence, risk_level = detect_bot(log_data.user_agent, log_data.ip_address)
+    # Earlier code Detect bot
+    # detected_bot, bot_provider, confidence, risk_level = detect_bot(log_data.user_agent, log_data.ip_address)
+
+    # New code update by Subhro 
+
+    headers = dict(Request.scope.get("headers", {})) if hasattr(Request, "scope") else {}
+    real_ip = get_real_ip(headers, log_data.ip_address)
+    detected_bot, bot_provider, confidence, risk_level = detect_bot(log_data.user_agent, real_ip)
+
     
     # Get geolocation
     geo_location = get_geo_location(log_data.ip_address)
@@ -756,7 +804,7 @@ async def log_traffic(log_data: TrafficLogCreate):
     traffic_log = TrafficLog(
         domain_id=domain['id'],
         user_id=domain['user_id'],
-        ip_address=log_data.ip_address,
+        ip_address=real_ip,
         user_agent=log_data.user_agent,
         detected_bot=detected_bot,
         bot_provider=bot_provider,
@@ -764,7 +812,9 @@ async def log_traffic(log_data: TrafficLogCreate):
         risk_level=risk_level,
         geo_location=geo_location,
         request_path=log_data.request_path,
+        fingerprint=fingerprint,
         request_method=log_data.request_method
+        
     )
     
     doc = traffic_log.model_dump()
