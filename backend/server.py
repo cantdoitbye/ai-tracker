@@ -234,6 +234,7 @@ class TrafficLog(BaseModel):
     user_agent: str
     detected_bot: Optional[str] = None
     bot_provider: Optional[str] = None
+    fingerprint: Optional[str] = None  # change by Subhro
     confidence_score: float = 0.0
     risk_level: str = "unknown"
     geo_location: Optional[Dict[str, Any]] = None
@@ -409,6 +410,27 @@ def get_real_ip(headers: dict, fallback_ip: str) -> str:
         return headers["x-real-ip"]
     return fallback_ip
 
+# code update by Subhro (The function analyze_behavior looks at recent request patterns for a given client 
+# (identified by a fingerprint) over the last 60 seconds and labels the behavior as Advanced RAG or LLM prefetch)
+
+def analyze_behavior(fingerprint: str, path: str) -> str:
+    now = time.time()
+    history = REQUEST_HISTORY[fingerprint]
+
+    history.append((now, path))
+    history[:] = [h for h in history if now - h[0] < 60]
+
+    req_count = len(history)
+    unique_paths = len(set(p for _, p in history))
+
+    if req_count > 25 and unique_paths > 6:
+        return "advanced-rag-crawler"
+
+    if req_count > 12 and unique_paths <= 3:
+        return "llm-prefetch"
+
+    return "normal"
+
 
 def extract_excerpt(content: str, length: int = 160) -> str:
     """Extract excerpt from content"""
@@ -417,42 +439,72 @@ def extract_excerpt(content: str, length: int = 160) -> str:
         return text
     return text[:length].rsplit(' ', 1)[0] + '...'
 
-def detect_bot(user_agent: str, ip_address: str) -> tuple:
-    """Detect if request is from AI bot and calculate confidence score"""
+# code update by Subhro because (bot detection should identify who the client claims to be, 
+# while behavior analysis determines what they are doing)
+
+BOT_SIGNATURES = {
+    "GPTBot": ["gptbot"],
+    "ChatGPT-User": ["chatgpt-user"],
+    "OpenAI-SearchBot": ["openai-search"],
+    "ClaudeBot": ["claudebot"],
+    "Google-Extended": ["google-extended"],
+    "GoogleOther": ["googleother"],
+    "Google-CloudVertexBot": ["cloudvertex"],
+    "FacebookBot": ["facebookbot"],
+    "Meta-ExternalAgent": ["meta-externalagent"],
+    "Amazonbot": ["amazonbot"],
+    "Applebot-Extended": ["applebot"],
+    "bingbot": ["bingbot"],
+    "msnbot": ["msnbot"],
+    "PerplexityBot": ["perplexity"],
+    "YouBot": ["youbot"],
+    "AndiBot": ["andibot"],
+    "NeevaBot": ["neeva"],
+    "PhindBot": ["phind"],
+    "KagiBot": ["kagi"],
+    "BraveBot": ["bravebot"],
+    "BraveGPTBot": ["brave-gpt"],
+    "DuckAssistBot": ["duckassist"],
+    "CCBot": ["ccbot"],
+    "CommonCrawl": ["commoncrawl"],
+    "DataForSeoBot": ["dataforseo"],
+    "SemrushBot": ["semrush"],
+    "AhrefsBot": ["ahrefs"],
+    "MJ12bot": ["mj12bot"],
+    "DotBot": ["dotbot"],
+    "BLEXBot": ["blexbot"]
+}
+
+def detect_bot(user_agent: str, ip_address: str):
+    ua = (user_agent or "").lower()
     detected_bot = None
-    bot_provider = None
-    confidence = 0.0
-    risk_level = "unknown"
-    
-    user_agent_lower = user_agent.lower()
-    
-    # Check user agent signatures
-    for bot_name, info in AI_BOT_SIGNATURES.items():
-        if bot_name.lower() in user_agent_lower:
-            detected_bot = bot_name
-            bot_provider = info['provider']
-            confidence = 0.9
-            risk_level = info['risk']
+
+    for bot, patterns in BOT_SIGNATURES.items():
+        if any(p in ua for p in patterns):
+            detected_bot = bot
             break
-    
-    # Check IP ranges
-    if not detected_bot:
-        for ip_range in AI_IP_RANGES:
-            if ip_address.startswith(ip_range):
-                confidence = 0.6
-                risk_level = "medium"
-                detected_bot = "Suspicious AI IP"
-                break
-    
-    # Check for headless browser indicators
-    headless_indicators = ['headless', 'phantom', 'selenium', 'puppeteer', 'playwright']
-    if any(indicator in user_agent_lower for indicator in headless_indicators):
-        if confidence == 0:
-            confidence = 0.5
-            risk_level = "medium"
-            detected_bot = "Headless Browser"
-    
-    return detected_bot, bot_provider, confidence, risk_level
+
+    confidence = 0.0
+    risk = "low"
+
+    if detected_bot:
+        confidence += 0.7
+        risk = "medium"
+
+    if any(x in ua for x in ["headless", "puppeteer", "playwright", "selenium"]):
+        confidence += 0.2
+        risk = "high"
+
+    return detected_bot, "AI / RAG Bot", min(confidence, 1.0), risk
+
+# code change by Subhro (ADMIN RADIO BUTTON to block bots)
+
+async def is_bot_blocked(bot_name: str):
+    if not bot_name:
+        return False
+    policy = await db.bot_policies.find_one({"bot_name": bot_name})
+    return policy and policy.get("action") == "block"
+
 
 def get_geo_location(ip: str) -> Optional[Dict[str, Any]]:
     """Get geolocation data for IP address using free API"""
@@ -786,6 +838,10 @@ async def log_traffic(log_data: TrafficLogCreate):
     # code update by Subhro adding fingerprint during logging
     # Find fingerprint
     fingerprint = generate_fingerprint(log_data.user_agent, headers, real_ip)
+    
+    # Find behavior 
+    behavior = analyze_behavior(fingerprint, log_data.request_path)
+
 
     
     # Earlier code Detect bot
@@ -812,7 +868,8 @@ async def log_traffic(log_data: TrafficLogCreate):
         risk_level=risk_level,
         geo_location=geo_location,
         request_path=log_data.request_path,
-        fingerprint=fingerprint,
+        fingerprint=fingerprint,                   # Update by Subhro
+        risk_level=behavior,                       # Update by Subhro
         request_method=log_data.request_method
         
     )
@@ -826,6 +883,13 @@ async def log_traffic(log_data: TrafficLogCreate):
         await check_and_send_alerts(domain['user_id'], domain['id'])
     
     return {"success": True, "bot_detected": detected_bot is not None, "confidence": confidence}
+
+    # code update by Subhro (if request as coming from a known bot and an admin has marked that bot as blocked, 
+    # immediately deny the request)
+
+    if detected_bot and await is_bot_blocked(detected_bot):
+    raise HTTPException(status_code=403, detail="Bot access blocked")
+
 
 async def check_and_send_alerts(user_id: str, domain_id: str):
     """Check if alert threshold is reached and send alerts"""
