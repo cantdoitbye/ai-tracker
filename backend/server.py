@@ -234,7 +234,8 @@ class TrafficLog(BaseModel):
     user_agent: str
     detected_bot: Optional[str] = None
     bot_provider: Optional[str] = None
-    fingerprint: Optional[str] = None  # change by Subhro
+    fingerprint: Optional[str] = None      # change by Subhro
+    behavior_type: Optional[str] = None    # change by Subhro
     confidence_score: float = 0.0
     risk_level: str = "unknown"
     geo_location: Optional[Dict[str, Any]] = None
@@ -836,10 +837,10 @@ async def log_traffic(log_data: TrafficLogCreate):
         raise HTTPException(status_code=404, detail="Domain not found or not verified")
 
     # code update by Subhro adding fingerprint during logging
-    # Find fingerprint
+    # Find fingerprint 
     fingerprint = generate_fingerprint(log_data.user_agent, headers, real_ip)
     
-    # Find behavior 
+    # Find behavior  
     behavior = analyze_behavior(fingerprint, log_data.request_path)
 
 
@@ -870,6 +871,7 @@ async def log_traffic(log_data: TrafficLogCreate):
         request_path=log_data.request_path,
         fingerprint=fingerprint,                   # Update by Subhro
         risk_level=behavior,                       # Update by Subhro
+        behavior_type=behavior,                    # Update by Subhro
         request_method=log_data.request_method
         
     )
@@ -888,7 +890,7 @@ async def log_traffic(log_data: TrafficLogCreate):
     # immediately deny the request)
 
     if detected_bot and await is_bot_blocked(detected_bot):
-    raise HTTPException(status_code=403, detail="Bot access blocked")
+        raise HTTPException(status_code=403, detail="Bot access blocked")
 
 
 async def check_and_send_alerts(user_id: str, domain_id: str):
