@@ -21,6 +21,7 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 import hashlib
 import json
+from fastapi import Request
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -824,7 +825,7 @@ async def delete_api_key(key_id: str, user: dict = Depends(get_current_user)):
 
 # Traffic Logging Routes
 @api_router.post("/traffic/log")
-async def log_traffic(log_data: TrafficLogCreate):
+async def log_traffic(log_data: TrafficLogCreate, request: Request):
     # Verify API key
     api_key_doc = await db.api_keys.find_one({"key": log_data.api_key, "is_active": True}, {"_id": 0})
     if not api_key_doc:
@@ -836,27 +837,24 @@ async def log_traffic(log_data: TrafficLogCreate):
     if not domain:
         raise HTTPException(status_code=404, detail="Domain not found or not verified")
 
+    
+    # Earlier code Detect bot
+    # detected_bot, bot_provider, confidence, risk_level = detect_bot(log_data.user_agent, log_data.ip_address) 
+    # New code update by Subhro 
+
+    headers = dict(request.headers)
+    real_ip = get_real_ip(headers, log_data.ip_address)
+    detected_bot, bot_provider, confidence, risk_level = detect_bot(log_data.user_agent, real_ip)
+
     # code update by Subhro adding fingerprint during logging
     # Find fingerprint 
     fingerprint = generate_fingerprint(log_data.user_agent, headers, real_ip)
     
     # Find behavior  
     behavior = analyze_behavior(fingerprint, log_data.request_path)
-
-
-    
-    # Earlier code Detect bot
-    # detected_bot, bot_provider, confidence, risk_level = detect_bot(log_data.user_agent, log_data.ip_address)
-
-    # New code update by Subhro 
-
-    headers = dict(Request.scope.get("headers", {})) if hasattr(Request, "scope") else {}
-    real_ip = get_real_ip(headers, log_data.ip_address)
-    detected_bot, bot_provider, confidence, risk_level = detect_bot(log_data.user_agent, real_ip)
-
     
     # Get geolocation
-    geo_location = get_geo_location(log_data.ip_address)
+    geo_location = get_geo_location(real_ip)
     
     traffic_log = TrafficLog(
         domain_id=domain['id'],
@@ -870,7 +868,6 @@ async def log_traffic(log_data: TrafficLogCreate):
         geo_location=geo_location,
         request_path=log_data.request_path,
         fingerprint=fingerprint,                   # Update by Subhro
-        risk_level=behavior,                       # Update by Subhro
         behavior_type=behavior,                    # Update by Subhro
         request_method=log_data.request_method
         
@@ -883,14 +880,15 @@ async def log_traffic(log_data: TrafficLogCreate):
     # Check alerts if bot detected
     if detected_bot and confidence > 0.5:
         await check_and_send_alerts(domain['user_id'], domain['id'])
-    
-    return {"success": True, "bot_detected": detected_bot is not None, "confidence": confidence}
 
-    # code update by Subhro (if request as coming from a known bot and an admin has marked that bot as blocked, 
+# code update by Subhro (if request as coming from a known bot and an admin has marked that bot as blocked, 
     # immediately deny the request)
 
     if detected_bot and await is_bot_blocked(detected_bot):
         raise HTTPException(status_code=403, detail="Bot access blocked")
+
+
+    return {"success": True, "bot_detected": detected_bot is not None, "confidence": confidence}
 
 
 async def check_and_send_alerts(user_id: str, domain_id: str):
