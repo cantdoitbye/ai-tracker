@@ -823,6 +823,7 @@ async def delete_api_key(key_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="API key not found")
     return {"success": True}
 
+# change by Subhro added (request: Request)
 # Traffic Logging Routes
 @api_router.post("/traffic/log")
 async def log_traffic(log_data: TrafficLogCreate, request: Request):
