@@ -21,7 +21,7 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 import hashlib
 import json
-from fastapi import Request
+
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -34,7 +34,11 @@ db = client[os.environ['DB_NAME']]
 # Security
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
-JWT_SECRET = os.environ.get('JWT_SECRET', secrets.token_urlsafe(32))
+# code change by subhro problem with earlier code (JWT secret is randomly generated on each server restart if not in environment)
+JWT_SECRET = os.environ.get('JWT_SECRET')
+if not JWT_SECRET:
+    JWT_SECRET = secrets.token_urlsafe(32)
+    logger.warning("JWT_SECRET not set in environment. Using randomly generated secret. All tokens will be invalidated on server restart!")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION = 24 * 7  # 7 days
 
@@ -47,7 +51,20 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # code update by Subhro (No database indexes are created before. This will cause slow queries as data grows line 57-67 added)
     # Startup
+    # Create indexes for better query performance
+    await db.users.create_index("email", unique=True)
+    await db.users.create_index("google_id")
+    await db.domains.create_index([("user_id", 1), ("domain", 1)])
+    await db.domains.create_index("is_verified")
+    await db.api_keys.create_index([("user_id", 1), ("key", 1)])
+    await db.traffic_logs.create_index([("user_id", 1), ("timestamp", -1)])
+    await db.traffic_logs.create_index("domain_id")
+    await db.traffic_logs.create_index("detected_bot")
+    await db.blogs.create_index("slug", unique=True)
+    await db.blogs.create_index([("status", 1), ("published_at", -1)])
+    logger.info("Database indexes created")
     yield
     # Shutdown
     client.close()
@@ -57,6 +74,14 @@ app = FastAPI(lifespan=lifespan)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # code update by Subhro adding global memory for BEHAVIORAL (RAG) ANALYSIS
 from collections import defaultdict
@@ -827,18 +852,20 @@ async def delete_api_key(key_id: str, user: dict = Depends(get_current_user)):
 # Traffic Logging Routes
 @api_router.post("/traffic/log")
 async def log_traffic(log_data: TrafficLogCreate, request: Request):
-    # Verify API key
-    api_key_doc = await db.api_keys.find_one({"key": log_data.api_key, "is_active": True}, {"_id": 0})
-    if not api_key_doc:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-    
+        
     # Find domain
     domain = await db.domains.find_one({"domain": log_data.domain, "is_verified": True}, {"_id": 0})
     if not domain:
         raise HTTPException(status_code=404, detail="Domain not found or not verified")
 
-    
+    # change by Subhro the verify line is taken below as (You verify that the API key exists 
+    # but not that it belongs to the domain owner.)
+
+    # Verify API key
+    api_key_doc = await db.api_keys.find_one({"key": log_data.api_key, "is_active": True}, {"_id": 0})
+    if not api_key_doc:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
     # Earlier code Detect bot
     # detected_bot, bot_provider, confidence, risk_level = detect_bot(log_data.user_agent, log_data.ip_address) 
     # New code update by Subhro 
@@ -856,6 +883,14 @@ async def log_traffic(log_data: TrafficLogCreate, request: Request):
     
     # Get geolocation
     geo_location = get_geo_location(real_ip)
+
+
+    # code update by Subhro (if request as coming from a known bot and an admin has marked that bot as blocked, 
+    # immediately deny the request)
+
+    if detected_bot and await is_bot_blocked(detected_bot):
+        raise HTTPException(status_code=403, detail="Bot access blocked")
+
     
     traffic_log = TrafficLog(
         domain_id=domain['id'],
@@ -882,11 +917,6 @@ async def log_traffic(log_data: TrafficLogCreate, request: Request):
     if detected_bot and confidence > 0.5:
         await check_and_send_alerts(domain['user_id'], domain['id'])
 
-# code update by Subhro (if request as coming from a known bot and an admin has marked that bot as blocked, 
-    # immediately deny the request)
-
-    if detected_bot and await is_bot_blocked(detected_bot):
-        raise HTTPException(status_code=403, detail="Bot access blocked")
 
 
     return {"success": True, "bot_detected": detected_bot is not None, "confidence": confidence}
@@ -1292,8 +1322,17 @@ async def get_blog_by_slug(slug: str):
 
 @api_router.get("/blogs/tags/all")
 async def get_all_tags():
-    # Get all published blogs
-    blogs = await db.blogs.find({"status": "published"}, {"_id": 0, "tags": 1}).to_list(10000)
+    # code update by Subhro earlier code Fetches 10,000 documents to count tags now used aggregation pipeline
+    
+    pipeline = [
+        {"$match": {"status": "published"}},
+        {"$unwind": "$tags"},
+        {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$project": {"name": "$_id", "count": 1, "_id": 0}}
+    ]
+    tags = await db.blogs.aggregate(pipeline).to_list(None)
+    return tags
     
     # Count tags
     tag_counter = Counter()
@@ -1307,14 +1346,6 @@ async def get_all_tags():
 
 # Include the router in the main app
 app.include_router(api_router)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Configure logging
 logging.basicConfig(
