@@ -21,6 +21,8 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 import hashlib
 import json
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 
 ROOT_DIR = Path(__file__).parent
@@ -458,6 +460,19 @@ def analyze_behavior(fingerprint: str, path: str) -> str:
 
     return "normal"
 
+#code change by Subhro 
+# Add periodic cleanup
+async def cleanup_request_history():
+    while True:
+        await asyncio.sleep(3600)  # Every hour
+        now = time.time()
+        for key in list(REQUEST_HISTORY.keys()):
+            REQUEST_HISTORY[key] = [h for h in REQUEST_HISTORY[key] if now - h[0] < 3600]
+            if not REQUEST_HISTORY[key]:
+                del REQUEST_HISTORY[key]
+
+# Add to lifespan startup:
+asyncio.create_task(cleanup_request_history())
 
 def extract_excerpt(content: str, length: int = 160) -> str:
     """Extract excerpt from content"""
@@ -882,7 +897,14 @@ async def log_traffic(log_data: TrafficLogCreate, request: Request):
     behavior = analyze_behavior(fingerprint, log_data.request_path)
     
     # Get geolocation
-    geo_location = get_geo_location(real_ip)
+    # geo_location = get_geo_location(real_ip)
+    # code change by Subhro (Make it async or run in thread pool, or make it optional/background task:)
+    executor = ThreadPoolExecutor(max_workers=5)
+
+    # In the route:
+    loop = asyncio.get_event_loop()
+    geo_location = await loop.run_in_executor(executor, get_geo_location, real_ip)
+
 
 
     # code update by Subhro (if request as coming from a known bot and an admin has marked that bot as blocked, 
