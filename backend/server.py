@@ -24,6 +24,14 @@ import json
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+# code update by Subhro Logger was deined too late earlier
+# Configure logging FIRST
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -66,9 +74,25 @@ async def lifespan(app: FastAPI):
     await db.traffic_logs.create_index("detected_bot")
     await db.blogs.create_index("slug", unique=True)
     await db.blogs.create_index([("status", 1), ("published_at", -1)])
+    await db.traffic_logs.create_index("fingerprint")
+    await db.traffic_logs.create_index("behavior_type")
+    await db.traffic_logs.create_index("timestamp")
+    await db.api_keys.create_index("key", unique=True)
+    await db.api_keys.create_index("is_active")
+    await db.bot_policies.create_index("bot_name", unique=True)
     logger.info("Database indexes created")
+
+    # START CLEANUP TASK HERE (code update by Subhro)
+    cleanup_task = asyncio.create_task(cleanup_request_history())
+    logger.info("Cleanup task started")
     yield
     # Shutdown
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        logger.info("Cleanup task cancelled")
+    GEO_EXECUTOR.shutdown(wait=True) 
     client.close()
 
 # Create the main app without a prefix
@@ -90,36 +114,7 @@ from collections import defaultdict
 import time
 
 REQUEST_HISTORY = defaultdict(list)
-
-
-# Known AI Bot Signatures
-AI_BOT_SIGNATURES = {
-    'GPTBot': {'provider': 'OpenAI', 'risk': 'high'},
-    'ChatGPT-User': {'provider': 'OpenAI', 'risk': 'high'},
-    'Claude-Web': {'provider': 'Anthropic', 'risk': 'high'},
-    'ClaudeBot': {'provider': 'Anthropic', 'risk': 'high'},
-    'anthropic-ai': {'provider': 'Anthropic', 'risk': 'high'},
-    'Google-Extended': {'provider': 'Google', 'risk': 'high'},
-    'GoogleOther': {'provider': 'Google', 'risk': 'medium'},
-    'PerplexityBot': {'provider': 'Perplexity', 'risk': 'high'},
-    'Applebot-Extended': {'provider': 'Apple', 'risk': 'medium'},
-    'FacebookBot': {'provider': 'Meta', 'risk': 'medium'},
-    'facebookexternalhit': {'provider': 'Meta', 'risk': 'low'},
-    'Bytespider': {'provider': 'ByteDance', 'risk': 'high'},
-    'Diffbot': {'provider': 'Diffbot', 'risk': 'medium'},
-    'CCBot': {'provider': 'Common Crawl', 'risk': 'high'},
-    'cohere-ai': {'provider': 'Cohere', 'risk': 'high'},
-    'omgili': {'provider': 'Omgili', 'risk': 'medium'},
-    'YouBot': {'provider': 'You.com', 'risk': 'high'},
-    'anthropic': {'provider': 'Anthropic', 'risk': 'high'},
-    'Claude': {'provider': 'Anthropic', 'risk': 'high'},
-}
-
-AI_IP_RANGES = [
-    '13.56.', '13.57.', '52.24.', '52.52.',  # AWS (OpenAI)
-    '35.247.', '34.82.',  # GCP (Various AI)
-    '20.', '40.',  # Azure (Various AI)
-]
+GEO_EXECUTOR = ThreadPoolExecutor(max_workers=5)
 
 # Models
 class User(BaseModel):
@@ -471,9 +466,6 @@ async def cleanup_request_history():
             if not REQUEST_HISTORY[key]:
                 del REQUEST_HISTORY[key]
 
-# Add to lifespan startup:
-asyncio.create_task(cleanup_request_history())
-
 def extract_excerpt(content: str, length: int = 160) -> str:
     """Extract excerpt from content"""
     text = strip_html(content)
@@ -570,6 +562,27 @@ def get_geo_location(ip: str) -> Optional[Dict[str, Any]]:
 # Auth Routes
 @api_router.post("/auth/register", response_model=UserResponse)
 async def register(user_data: UserCreate):
+
+    # Code update by Subhro Validate password strength for security reasons
+
+    if len(user_data.password) < 8:
+        raise HTTPException(
+            status_code=400, 
+            detail="Password must be at least 8 characters"
+        )
+    
+    if not any(c.isupper() for c in user_data.password):
+        raise HTTPException(
+            status_code=400, 
+            detail="Password must contain at least one uppercase letter"
+        )
+    
+    if not any(c.isdigit() for c in user_data.password):
+        raise HTTPException(
+            status_code=400, 
+            detail="Password must contain at least one number"
+        )
+    
     # Check if user exists
     existing = await db.users.find_one({"email": user_data.email})
     if existing:
@@ -881,6 +894,13 @@ async def log_traffic(log_data: TrafficLogCreate, request: Request):
     if not api_key_doc:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+    # Code update by Subhro (CRITICAL: Verify API key belongs to domain owner)
+    if api_key_doc['user_id'] != domain['user_id']:
+        raise HTTPException(
+            status_code=403, 
+            detail="API key does not have permission for this domain"
+    )
+
     # Earlier code Detect bot
     # detected_bot, bot_provider, confidence, risk_level = detect_bot(log_data.user_agent, log_data.ip_address) 
     # New code update by Subhro 
@@ -899,12 +919,9 @@ async def log_traffic(log_data: TrafficLogCreate, request: Request):
     # Get geolocation
     # geo_location = get_geo_location(real_ip)
     # code change by Subhro (Make it async or run in thread pool, or make it optional/background task:)
-    executor = ThreadPoolExecutor(max_workers=5)
-
-    # In the route:
+    
     loop = asyncio.get_event_loop()
-    geo_location = await loop.run_in_executor(executor, get_geo_location, real_ip)
-
+    geo_location = await loop.run_in_executor(GEO_EXECUTOR, get_geo_location, real_ip)
 
 
     # code update by Subhro (if request as coming from a known bot and an admin has marked that bot as blocked, 
@@ -1355,25 +1372,6 @@ async def get_all_tags():
     ]
     tags = await db.blogs.aggregate(pipeline).to_list(None)
     return tags
-    
-    # Count tags
-    tag_counter = Counter()
-    for blog in blogs:
-        for tag in blog.get('tags', []):
-            tag_counter[tag] += 1
-    
-    # Return sorted by count
-    tags = [{"name": tag, "count": count} for tag, count in tag_counter.most_common()]
-    return tags
 
 # Include the router in the main app
 app.include_router(api_router)
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-
